@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mon Budget</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--txt:#1d2733;--mut:#6b7785;--green:#16a34a;--red:#dc2626;--orange:#f59e0b;--blue:#2563eb;--line:#e3e8ee}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);padding:12px 12px 60px;max-width:760px;margin:auto}
+h1{font-size:1.3rem;margin:6px 0 12px}
+h2{font-size:1.05rem;margin:0 0 10px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+input,select,button{font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--txt);min-width:0}
+input[type=number]{width:120px;text-align:right}
+button{cursor:pointer;background:var(--blue);color:#fff;border:0;font-weight:600}
+button.sec{background:#e8edf3;color:var(--txt)}
+button.del{background:transparent;color:var(--red);padding:6px 10px;font-size:1.1rem}
+.row{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+.row input[type=text]{flex:1}
+.top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.top input{flex:1}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.kpi{background:var(--bg);border-radius:10px;padding:10px}
+.kpi small{color:var(--mut);display:block}
+.kpi b{font-size:1.05rem}
+.g{color:var(--green)}.r{color:var(--red)}.o{color:var(--orange)}
+.bar{height:10px;background:#e5e9ee;border-radius:6px;overflow:hidden;margin:6px 0 2px}
+.bar i{display:block;height:100%;border-radius:6px}
+.cat{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.cat:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.meta{display:flex;justify-content:space-between;font-size:.85rem;color:var(--mut)}
+.exp{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:6px 0;font-size:.9rem}
+.exp span small{color:var(--mut);display:block}
+canvas{max-height:280px}
+.note{color:var(--mut);font-size:.8rem}
+@media(min-width:600px){.kpis{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<h1>💰 Mon Budget</h1>
+
+<div class="card top">
+  <input type="month" id="month">
+  <button class="sec" data-a="export">Sauvegarde</button>
+  <button class="sec" data-a="import">Restaurer</button>
+  <input type="file" id="file" accept=".json" hidden>
+</div>
+
+<div class="card">
+  <h2>☁️ Sauvegarde GitHub (toutes les 2 min)</h2>
+  <div class="row"><input type="password" id="ghTok" placeholder="Colle ton token GitHub" style="flex:1"><button class="sec" id="ghTokBtn">OK</button></div>
+  <div class="row"><button id="ghNow" style="flex:1">Sauvegarder maintenant</button><button class="sec" id="ghRestore" style="flex:1">Restaurer</button></div>
+  <div class="note" id="ghStatus">Pas encore de token.</div>
+</div>
+
+<div class="card"><div class="kpis" id="kpis"></div><div id="globalBar"></div></div>
+
+<div class="card">
+  <h2>Revenus</h2>
+  <div id="incomes"></div>
+</div>
+
+<div class="card">
+  <h2>Budget par catégorie</h2>
+  <div id="cats"></div>
+  <button class="sec" data-a="addCat">+ Ajouter une catégorie</button>
+</div>
+
+<div class="card">
+  <h2>Ajouter une dépense</h2>
+  <div class="row"><select id="eCat" style="flex:1"></select></div>
+  <div class="row"><input type="text" id="eLabel" placeholder="Libellé (ex: riz, taxi...)"><input type="number" id="eAmt" placeholder="Montant" inputmode="numeric"></div>
+  <button data-a="addExp" style="width:100%">Ajouter</button>
+</div>
+
+<div class="card">
+  <h2>Graphiques</h2>
+  <canvas id="c1"></canvas>
+  <div style="height:16px"></div>
+  <canvas id="c2"></canvas>
+  <p class="note" id="noChart" hidden>Graphiques indisponibles (connexion requise au premier chargement).</p>
+</div>
+
+<div class="card">
+  <h2>Dépenses du mois</h2>
+  <div id="expenses"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const KEY='budget_v1';
+let dirty=false,syncing=false;
+let S=load();
+function load(){try{return JSON.parse(localStorage.getItem(KEY))||{months:{}}}catch(e){return {months:{}}}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}dirty=true}
+const uid=()=>Math.random().toString(36).slice(2,9);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Math.round(n).toLocaleString('fr-FR')+' FCFA';
+const num=v=>{const n=parseFloat(v);return isNaN(n)?0:n};
+let cur=new Date().toISOString().slice(0,7);
+let charts={};
+
+function prevKey(k){let [y,m]=k.split('-').map(Number);m--;if(m<1){m=12;y--}return y+'-'+String(m).padStart(2,'0')}
+function M(){
+  if(!S.months[cur]){
+    const p=S.months[prevKey(cur)];
+    if(p){
+      S.months[cur]={
+        incomes:p.incomes.map(i=>({...i,id:uid()})),
+        cats:p.cats.map(c=>({...c,id:uid()})),
+        expenses:[]
+      };
+    }else{
+      S.months[cur]={
+        incomes:[{id:uid(),type:'principal',name:'Salaire',amount:0},{id:uid(),type:'compl',name:'Revenu complémentaire',amount:0}],
+        cats:['Logement','Alimentation','Transport','Santé','Éducation','Loisirs','Épargne'].map(n=>({id:uid(),name:n,budget:0})),
+        expenses:[]
+      };
+    }
+    save();
+  }
+  return S.months[cur];
+}
+const spentOf=(m,id)=>m.expenses.filter(e=>e.cat===id).reduce((a,e)=>a+e.amount,0);
+const colorFor=p=>p>100?'var(--red)':p>=80?'var(--orange)':'var(--green)';
+
+function render(){
+  const m=M();
+  document.getElementById('month').value=cur;
+  const rev=m.incomes.reduce((a,i)=>a+i.amount,0);
+  const bud=m.cats.reduce((a,c)=>a+c.budget,0);
+  const dep=m.expenses.reduce((a,e)=>a+e.amount,0);
+  const reste=rev-dep, libre=rev-bud;
+  document.getElementById('kpis').innerHTML=
+   `<div class="kpi"><small>Revenus</small><b class="g">${fmt(rev)}</b></div>
+    <div class="kpi"><small>Budget prévu</small><b>${fmt(bud)}</b></div>
+    <div class="kpi"><small>Dépensé</small><b class="${dep>rev?'r':''}">${fmt(dep)}</b></div>
+    <div class="kpi"><small>Reste</small><b class="${reste>=0?'g':'r'}">${fmt(reste)}</b></div>`;
+  const pg=rev>0?dep/rev*100:(dep>0?101:0);
+  document.getElementById('globalBar').innerHTML=
+   `<div class="bar"><i style="width:${Math.min(pg,100)}%;background:${colorFor(pg)}"></i></div>
+    <div class="meta"><span>${Math.round(pg)}% des revenus dépensés</span><span class="${libre>=0?'g':'r'}">${libre>=0?'Non budgété : ':'Budget dépasse revenus de '}${fmt(Math.abs(libre))}</span></div>`;
+
+  const incHtml=(type,title)=>{
+    const list=m.incomes.filter(i=>i.type===type);
+    return `<div class="note" style="margin:6px 0">${title}</div>`+
+      list.map(i=>`<div class="row"><input type="text" value="${esc(i.name)}" data-c="incName" data-id="${i.id}"><input type="number" inputmode="numeric" value="${i.amount||''}" placeholder="0" data-c="incAmt" data-id="${i.id}"><button class="del" data-a="delInc" data-id="${i.id}">✕</button></div>`).join('')+
+      `<button class="sec" data-a="addInc" data-t="${type}">+ Ajouter</button>`;
+  };
+  document.getElementById('incomes').innerHTML=incHtml('principal','Revenu principal')+'<div style="height:10px"></div>'+incHtml('compl','Revenus complémentaires');
+
+  document.getElementById('cats').innerHTML=m.cats.map(c=>{
+    const s=spentOf(m,c.id);
+    const p=c.budget>0?s/c.budget*100:(s>0?101:0);
+    const diff=c.budget-s;
+    return `<div class="cat">
+      <div class="row"><input type="text" value="${esc(c.name)}" data-c="catName" data-id="${c.id}"><input type="number" inputmode="numeric" value="${c.budget||''}" placeholder="Budget" data-c="catBud" data-id="${c.id}"><button class="del" data-a="delCat" data-id="${c.id}">✕</button></div>
+      <div class="bar"><i style="width:${Math.min(p,100)}%;background:${colorFor(p)}"></i></div>
+      <div class="meta"><span>Dépensé : ${fmt(s)}</span><span class="${diff>=0?'g':'r'}">${diff>=0?'Reste ':'Dépassé de '}${fmt(Math.abs(diff))}</span></div>
+    </div>`;
+  }).join('')||'<p class="note">Aucune catégorie.</p>';
+
+  const sel=document.getElementById('eCat'), keep=sel.value;
+  sel.innerHTML=m.cats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  if(m.cats.some(c=>c.id===keep))sel.value=keep;
+
+  const nameOf=id=>(m.cats.find(c=>c.id===id)||{name:'?'}).name;
+  document.getElementById('expenses').innerHTML=m.expenses.slice().reverse().map(e=>
+    `<div class="exp"><span>${esc(e.label||'Dépense')}<small>${esc(nameOf(e.cat))} · ${e.date}</small></span><span><b class="r">-${fmt(e.amount)}</b> <button class="del" data-a="delExp" data-id="${e.id}">✕</button></span></div>`
+  ).join('')||'<p class="note">Aucune dépense enregistrée.</p>';
+
+  drawCharts(m);
+}
+
+function drawCharts(m){
+  if(typeof Chart==='undefined'){document.getElementById('noChart').hidden=false;return}
+  Object.values(charts).forEach(c=>c.destroy());
+  const labels=m.cats.map(c=>c.name);
+  const spent=m.cats.map(c=>spentOf(m,c.id));
+  const bud=m.cats.map(c=>c.budget);
+  const palette=['#2563eb','#16a34a','#f59e0b','#dc2626','#8b5cf6','#0ea5e9','#ec4899','#14b8a6','#84cc16','#f97316'];
+  charts.a=new Chart(document.getElementById('c1'),{type:'doughnut',
+    data:{labels,datasets:[{data:spent,backgroundColor:labels.map((_,i)=>palette[i%palette.length])}]},
+    options:{plugins:{title:{display:true,text:'Répartition des dépenses'},legend:{position:'bottom'}}}});
+  charts.b=new Chart(document.getElementById('c2'),{type:'bar',
+    data:{labels,datasets:[
+      {label:'Budget',data:bud,backgroundColor:'#16a34a'},
+      {label:'Dépensé',data:spent,backgroundColor:spent.map((s,i)=>s>bud[i]?'#dc2626':'#f59e0b')}
+    ]},
+    options:{plugins:{title:{display:true,text:'Budget vs dépensé (vert = prévu, rouge = dépassement)'}},scales:{y:{beginAtZero:true}}}});
+}
+
+document.addEventListener('click',ev=>{
+  const b=ev.target.closest('[data-a]');if(!b)return;
+  const m=M(),a=b.dataset.a,id=b.dataset.id;
+  if(a==='addInc')m.incomes.push({id:uid(),type:b.dataset.t,name:b.dataset.t==='principal'?'Revenu':'Revenu complémentaire',amount:0});
+  else if(a==='delInc')m.incomes=m.incomes.filter(i=>i.id!==id);
+  else if(a==='addCat')m.cats.push({id:uid(),name:'Nouvelle catégorie',budget:0});
+  else if(a==='delCat'){if(!confirm('Supprimer cette catégorie et ses dépenses ?'))return;m.cats=m.cats.filter(c=>c.id!==id);m.expenses=m.expenses.filter(e=>e.cat!==id)}
+  else if(a==='delExp')m.expenses=m.expenses.filter(e=>e.id!==id);
+  else if(a==='addExp'){
+    const amt=num(document.getElementById('eAmt').value),cat=document.getElementById('eCat').value;
+    if(!cat||amt<=0){alert('Choisis une catégorie et un montant.');return}
+    m.expenses.push({id:uid(),cat,label:document.getElementById('eLabel').value.trim(),amount:amt,date:new Date().toISOString().slice(0,10)});
+    document.getElementById('eAmt').value='';document.getElementById('eLabel').value='';
+  }
+  else if(a==='export'){
+    const blob=new Blob([JSON.stringify(S)],{type:'application/json'});
+    const l=document.createElement('a');l.href=URL.createObjectURL(blob);l.download='budget-sauvegarde.json';l.click();return;
+  }
+  else if(a==='import'){document.getElementById('file').click();return}
+  save();render();
+});
+document.addEventListener('change',ev=>{
+  const t=ev.target,c=t.dataset.c;
+  if(t.id==='month'){if(t.value){cur=t.value;render()}return}
+  if(t.id==='file'){
+    const f=t.files[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.months)throw 0;S=d;save();render()}catch(e){alert('Fichier invalide.')}};
+    r.readAsText(f);t.value='';return;
+  }
+  if(!c)return;
+  const m=M(),id=t.dataset.id;
+  if(c==='incName')m.incomes.find(i=>i.id===id).name=t.value;
+  else if(c==='incAmt')m.incomes.find(i=>i.id===id).amount=num(t.value);
+  else if(c==='catName')m.cats.find(x=>x.id===id).name=t.value;
+  else if(c==='catBud')m.cats.find(x=>x.id===id).budget=num(t.value);
+  save();render();
+});
+/* ===== Sauvegarde GitHub ===== */
+const GH={repo:'ndiayejoseph123-code/Budget',path:'budget-sauvegarde.json'};
+const GH_URL=`https://api.github.com/repos/${GH.repo}/contents/${GH.path}`;
+const tok=()=>{try{return localStorage.getItem('budget_gh_token')||''}catch(e){return ''}};
+const ghStatus=t=>{document.getElementById('ghStatus').textContent=t};
+const b64enc=s=>btoa(unescape(encodeURIComponent(s)));
+const b64dec=s=>decodeURIComponent(escape(atob(s.replace(/\n/g,''))));
+const ghHead=()=>({Authorization:'Bearer '+tok(),Accept:'application/vnd.github+json'});
+const hhmm=()=>new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+
+async function ghSave(manual){
+  if(!tok()){if(manual)ghStatus('Colle d\'abord ton token.');return}
+  if(syncing||(!dirty&&!manual))return;
+  syncing=true;
+  try{
+    let sha;
+    const g=await fetch(GH_URL,{headers:ghHead(),cache:'no-store'});
+    if(g.ok)sha=(await g.json()).sha;
+    else if(g.status!==404)throw new Error('Lecture refusée ('+g.status+')');
+    const snapshot=JSON.stringify(S);
+    const body={message:'Sauvegarde '+new Date().toISOString(),content:b64enc(snapshot)};
+    if(sha)body.sha=sha;
+    const p=await fetch(GH_URL,{method:'PUT',headers:{...ghHead(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!p.ok)throw new Error('Écriture refusée ('+p.status+')');
+    dirty=false;
+    ghStatus('✅ Sauvegardé à '+hhmm());
+  }catch(e){ghStatus('❌ '+e.message)}
+  finally{syncing=false}
+}
+async function ghRestore(){
+  if(!tok()){ghStatus('Colle d\'abord ton token.');return}
+  try{
+    const g=await fetch(GH_URL,{headers:ghHead(),cache:'no-store'});
+    if(g.status===404){ghStatus('Aucune sauvegarde trouvée sur GitHub.');return}
+    if(!g.ok)throw new Error('Lecture refusée ('+g.status+')');
+    const j=await g.json();
+    const d=JSON.parse(b64dec(j.content));
+    if(!d.months)throw new Error('Fichier invalide');
+    if(!confirm('Remplacer les données de ce téléphone par la sauvegarde GitHub ?'))return;
+    S=d;save();dirty=false;render();
+    ghStatus('✅ Restauré à '+hhmm());
+  }catch(e){ghStatus('❌ '+e.message)}
+}
+document.getElementById('ghTokBtn').addEventListener('click',()=>{
+  const v=document.getElementById('ghTok').value.trim();
+  if(!v)return;
+  try{localStorage.setItem('budget_gh_token',v)}catch(e){}
+  document.getElementById('ghTok').value='';
+  ghStatus('Token enregistré. Sauvegarde en cours…');
+  ghSave(true);
+});
+document.getElementById('ghNow').addEventListener('click',()=>ghSave(true));
+document.getElementById('ghRestore').addEventListener('click',ghRestore);
+if(tok())ghStatus('Token enregistré. Sauvegarde auto active.');
+setInterval(()=>ghSave(false),120000);
+
+render();
+</script>
+</body>
+</html>
